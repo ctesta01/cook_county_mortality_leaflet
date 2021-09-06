@@ -63,12 +63,8 @@ make_tract_mortality_counts <- function(deaths, cook_tracts) {
   
 }
 
-#' Add Area-Based Socioeconomic Measures
-#' @examples 
-#' tract_counts <- make_tract_mortality_counts(cook_county_deaths, cook_tracts)
-#' df <- tract_counts %>% add_absms()
-#' View(df)
-add_absms <- function(tract_counts) {
+#' Get Census Tract Sex, Race, Age Stratified Population Estimates
+get_tract_sex_race_age_stratified_popsizes <- function() {
   
   acs_vars <- tidycensus::load_variables(2019, dataset = 'acs5')
 
@@ -121,16 +117,32 @@ add_absms <- function(tract_counts) {
   
   tract_popsize %<>% left_join(acs_vars, by = c('variable' = 'name'))
   
+  return(tract_popsize)
+}
+
+
+#' Add Area-Based Socioeconomic Measures
+#' @examples 
+#' tract_counts <- make_tract_mortality_counts(cook_county_deaths, cook_tracts)
+#' df <- tract_counts %>% add_absms()
+#' View(df)
+add_absms <- function(tract_counts) {
+  
+  tract_popsize <- get_tract_sex_race_age_stratified_popsizes()
+  
+  tract_popsize_totals <- tract_popsize %>% filter(is.na(gender), is.na(age), concept == 'SEX BY AGE')
+  
   # join the death counts into the total tract population size (i.e. the 
   # gender == NA, age == NA population) and add a mortality rate per 100k column
-  tract_mort_rates <- tract_popsize %>% filter(is.na(gender), is.na(age), concept == 'SEX BY AGE') %>%
+  tract_mort_rates <- tract_popsize_totals %>%
     left_join(tract_counts, by = c('GEOID' = 'tract')) %>% 
     mutate(mort_per_100k = n / estimate * 1e5) 
     
   return(tract_mort_rates)
 }
 
-#' Make County Level Estimates 
+#' Make Tract Level Estimates of Mortality per 100k with Area Based Socioeconomic Measures
+#' 
 make_tract_mort_w_absms_df <- function(deaths, cook_tracts) {
   
   tract_counts <- make_tract_mortality_counts(cook_county_deaths, cook_tracts)
@@ -139,3 +151,39 @@ make_tract_mort_w_absms_df <- function(deaths, cook_tracts) {
   return(df)
 }
 
+
+
+#' Map Overall Tract Mortality Rates 
+map_overall_tract_mortality_rates <- function() {
+  
+ cook_county_deaths <- read_cook_county_deaths()
+ cook_tracts <- get_cook_cty_census_tracts()
+ 
+ tract_mort_rates <- make_tract_mort_w_absms_df(
+   deaths = cook_county_deaths, 
+   cook_tracts = cook_tracts)
+ 
+ # to update stored output/tract_mort_rates.rds file, run:
+ #> saveRDS(tract_mort_rates, here::here("output/tract_mort_rates.rds"))
+ 
+ bins <- c(0, 100, 200, 500, 1000, 2000, 5000, Inf)
+ pal <- colorBin("YlOrRd", domain = tract_mort_rates$mort_per_100k, bins = bins)
+ 
+ tract_mort_rates %>% 
+   leaflet() %>% 
+   addTiles() %>% 
+   addPolygons(
+     weight = 0,
+     fillOpacity = 0.75,
+     color = ~pal(mort_per_100k),
+     label = ~ str_c(
+       'deaths per 100k: ',
+       round(mort_per_100k),
+       ', deaths: ',
+       n,
+       ', popsize: ',
+       scales::comma_format()(estimate)
+     )
+   )
+ 
+}
