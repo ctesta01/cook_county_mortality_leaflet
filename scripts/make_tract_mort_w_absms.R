@@ -1,0 +1,141 @@
+
+#' Get Cook County, IL Census Tracts with tigris
+#' 
+#' @examples 
+#' 
+#' # code for creating census tracts map in leaflet
+#' cook_tracts %>% 
+#'   leaflet() %>% 
+#'   addTiles() %>% 
+#'   addPolygons(
+#'     weight = 2
+#'     )
+get_cook_cty_census_tracts <- function() {
+  tigris::tracts("IL", county = "Cook", year = 2019)
+}
+
+#' Calculate Census Tract Mortality Counts
+#' 
+#' @examples 
+#' # code for making simple map of death counts by census tract
+#' tract_counts <- make_tract_mortality_counts(cook_county_deaths, cook_tracts)
+#' 
+#' bins <- c(0, 10, 20, 50, 100, 200, Inf)
+#' pal <- colorBin("YlOrRd", domain = tract_counts$n, bins = bins)
+#' 
+#' cook_tracts %>% st_as_sf() %>% 
+#'   left_join(tract_counts,
+#'             by = c("GEOID" = 'tract')) %>% 
+#'   leaflet() %>% 
+#'   addTiles() %>% 
+#'   addPolygons(
+#'   weight = 0,
+#'   fillOpacity = 0.75,
+#'   color = ~pal(n),
+#'   label = ~ str_c('deaths: ', n))
+make_tract_mortality_counts <- function(deaths, cook_tracts) {
+  
+  # convert the deaths data into an sf object with the right coordinates
+  # columns and the same coordinate system (crs) as the cook_tracts data
+  df_sf <- deaths %>% 
+  filter(! is.na(longitude), ! is.na(latitude)) %>% 
+  st_as_sf(coords = c("longitude", "latitude"),
+           crs = st_crs(cook_tracts))
+  
+  # Determine which cook county tract ID each deaths data row corresponds to --
+  # and include it in df_sf as a tract. 
+  # as.numeric() is used to get the index of the output of st_within since it comes
+  # out as a geometry object.
+  df_sf$tract <- as.numeric(st_within(df_sf, cook_tracts %>% st_as_sf()))
+  
+  # Use those indices to look up the GEOID (tract ID) of which tract each death 
+  # record was coded to using st_within
+  df_sf$tract <- cook_tracts$GEOID[df_sf$tract]
+  
+  # drop the geometry, group by census tract, and count deaths by tract
+  tract_counts <- df_sf %>% 
+    as.data.frame() %>% 
+    select(-geometry) %>% 
+    group_by(tract) %>% 
+    count() 
+  
+  return(tract_counts)
+  
+}
+
+#' Add Area-Based Socioeconomic Measures
+#' @examples 
+#' tract_counts <- make_tract_mortality_counts(cook_county_deaths, cook_tracts)
+#' df <- tract_counts %>% add_absms()
+#' View(df)
+add_absms <- function(tract_counts) {
+  
+  acs_vars <- tidycensus::load_variables(2019, dataset = 'acs5')
+
+  race_chars <-
+    c(
+      white = 'A',
+      asian = 'D',
+      some_other_race = 'F',
+      two_or_more_races = 'G',
+      hispanic_or_latino = 'I'
+    )
+  
+  sex_race_age_vars <-
+    paste0(rep(paste0('B01001', race_chars, '_0'), each = 31),
+           str_pad(
+             1:31,
+             width = 2,
+             side = 'left',
+             pad = '0'
+           ))
+  
+  sex_race_age_vars %<>% c(.,
+                           paste0('B01001_0', str_pad(1:49, width = 2, side = 'left', pad = '0')))
+  
+  # split the label
+  acs_vars %<>%
+    separate(label,
+             into = c('estimate', 'total', 'gender', 'age', 'subgroup'),
+             sep = '!!')
+  
+  # clean label values (remove extra :s and leading/trailing spaces)
+  acs_vars %<>% mutate_at(.vars = vars(estimate, total, gender, age, subgroup),
+                          ~ gsub(":", "", .) %>% stringr::str_trim())
+  
+  # select only what we need
+  acs_vars %<>% select(name, total, gender, age, concept)
+  
+  # get sex, race (incl. hispanic or latino), and age stratified population
+  # estimates
+  tract_popsize <-
+    tidycensus::get_acs(
+      geography = 'tract',
+      state = 'IL',
+      county = 'Cook',
+      year = 2019,
+      geometry = T,
+      variables = sex_race_age_vars,
+      output = 'tidy'
+    )
+  
+  tract_popsize %<>% left_join(acs_vars, by = c('variable' = 'name'))
+  
+  # join the death counts into the total tract population size (i.e. the 
+  # gender == NA, age == NA population) and add a mortality rate per 100k column
+  tract_mort_rates <- tract_popsize %>% filter(is.na(gender), is.na(age), concept == 'SEX BY AGE') %>%
+    left_join(tract_counts, by = c('GEOID' = 'tract')) %>% 
+    mutate(mort_per_100k = n / estimate * 1e5) 
+    
+  return(tract_mort_rates)
+}
+
+#' Make County Level Estimates 
+make_tract_mort_w_absms_df <- function(deaths, cook_tracts) {
+  
+  tract_counts <- make_tract_mortality_counts(cook_county_deaths, cook_tracts)
+  df <- tract_counts %>% add_absms()
+  
+  return(df)
+}
+
