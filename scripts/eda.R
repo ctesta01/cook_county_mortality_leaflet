@@ -38,6 +38,47 @@ map_feature(cook_tracts_w_data, 'pct_hispanic')
 map_feature(cook_tracts_w_data, 'ice_black_white')
 
 
+
+# making one map w everything ---------------------------------------------
+
+variables <- c('mort_per_100k', 
+               'pct_poc',
+               'pct_black',
+               'pct_hispanic',
+               'ice_black_white')
+               
+variable_pals <- lapply(variables, function(feature) {
+  bins <- unique(c(0, quantile(cook_tracts_w_data[[feature]], seq(0,1,0.2), na.rm=T), Inf))
+  pal <- colorBin("YlOrRd", domain = cook_tracts_w_data[[feature]], bins = bins)
+  return(pal)
+})
+
+names(variable_pals) <- variables
+  
+
+rendered_leaflet <- cook_tracts_w_data %>% 
+    leaflet() %>% 
+    addTiles() 
+
+for (feature in variables) {
+  rendered_leaflet <- rendered_leaflet %>% 
+      addPolygons(
+        weight = 0,
+        fillOpacity = 0.75,
+        color = variable_pals[[feature]](cook_tracts_w_data[[feature]]),
+        label = str_c(feature, ": ", round(cook_tracts_w_data[[feature]], 2)),
+        group = feature
+      )
+  }
+
+rendered_leaflet %<>%   addLayersControl(
+  baseGroups = variables,
+  options = layersControlOptions(collapsed = FALSE)
+)
+
+rendered_leaflet
+
+
 library(randomForest)
 
 model <- randomForest(
