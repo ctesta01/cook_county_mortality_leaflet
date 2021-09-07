@@ -14,31 +14,6 @@ df <- tract_deaths %>% add_absms()
 cook_tracts_w_data <- cook_tracts %>% st_as_sf() %>% left_join(
   df, by = c('GEOID' = 'GEOID'))
 
-map_feature <- function(df, feature = 'mort_per_100k') {
-  
-  bins <- unique(c(0, quantile(df[[feature]], seq(0,1,0.2), na.rm=T), Inf))
-  pal <- colorBin("YlOrRd", domain = df[[feature]], bins = bins)
-  
-  df %>% 
-    leaflet() %>% 
-    addTiles() %>% 
-    addPolygons(
-      weight = 0,
-      fillOpacity = 0.75,
-      color = pal(df[[feature]]),
-      label = round(df[[feature]], 2)
-    )
-}
-
-
-map_feature(cook_tracts_w_data, 'mort_per_100k')
-map_feature(cook_tracts_w_data, 'pct_black')
-map_feature(cook_tracts_w_data, 'pct_poc')
-map_feature(cook_tracts_w_data, 'pct_hispanic')
-map_feature(cook_tracts_w_data, 'ice_black_white')
-
-
-
 # making one map w everything ---------------------------------------------
 
 variables <- c('mort_per_100k', 
@@ -79,6 +54,8 @@ rendered_leaflet %<>%   addLayersControl(
 rendered_leaflet
 
 
+# creating a random forest model ------------------------------------------
+
 library(randomForest)
 
 model <- randomForest(
@@ -88,10 +65,15 @@ model <- randomForest(
     select(mort_per_100k, starts_with('pct_')) %>% 
     na.omit())
 
+
+# plot variable importance ------------------------------------------------
+
 library(vip)
 
 vip(model)
 
+
+# plot pct poc vs. mortality ----------------------------------------------
 
 ggplot(cook_tracts_w_data, aes(x = pct_poc, y = mort_per_100k, size = overall)) + 
   geom_point(alpha=0.5) + 
