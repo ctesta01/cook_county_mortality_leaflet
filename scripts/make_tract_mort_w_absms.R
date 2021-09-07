@@ -67,16 +67,17 @@ make_tract_mortality_counts <- function(deaths, cook_tracts) {
 get_tract_sex_race_age_stratified_popsizes <- function() {
   
   acs_vars <- tidycensus::load_variables(2019, dataset = 'acs5')
-
+  
   race_chars <-
     c(
       white = 'A',
+      black = 'B',
       asian = 'D',
       some_other_race = 'F',
       two_or_more_races = 'G',
       hispanic_or_latino = 'I'
     )
-  
+
   sex_race_age_vars <-
     paste0(rep(paste0('B01001', race_chars, '_0'), each = 31),
            str_pad(
@@ -123,20 +124,61 @@ get_tract_sex_race_age_stratified_popsizes <- function() {
 
 #' Add Area-Based Socioeconomic Measures
 #' @examples 
-#' tract_counts <- make_tract_mortality_counts(cook_county_deaths, cook_tracts)
+#' tract_deaths <- make_tract_mortality_counts(cook_county_deaths, cook_tracts)
 #' df <- tract_counts %>% add_absms()
 #' View(df)
-add_absms <- function(tract_counts) {
+add_absms <- function(tract_deaths) {
   
   tract_popsize <- get_tract_sex_race_age_stratified_popsizes()
   
-  tract_popsize_totals <- tract_popsize %>% filter(is.na(gender), is.na(age), concept == 'SEX BY AGE')
+  race_chars <-
+    c(
+      white = 'A',
+      black = 'B',
+      asian = 'D',
+      some_other_race = 'F',
+      two_or_more_races = 'G',
+      hispanic_or_latino = 'I',
+      overall = ''
+    )
+  
+  # code race/ethnicity for each variable
+  tract_popsize %<>% rowwise() %>% mutate(
+    race_char = str_extract(substr(variable, 2, 10), "[A-Z]"),
+    race_char = ifelse(is.na(race_char), "", race_char),
+    race_char_idx = which(race_char == race_chars),
+    race = names(race_chars)[race_char_idx]
+    ) %>%
+    select(-c(race_char, race_char_idx))
+  
+  # pivot to wide format for population totals by race
+  tract_popsize_totals <- tract_popsize %>% 
+    as.data.frame() %>% 
+    filter(is.na(age) & is.na(gender)) %>% 
+    select(GEOID, race, estimate) %>% 
+    pivot_wider(
+      id_cols = GEOID,
+      names_from = race,
+      values_from = estimate) 
+  
+  # add in census tract features (pct race, ice)
+  tract_features <- tract_popsize_totals %>% 
+    mutate(
+      pct_black = black / overall,
+      pct_poc = 1-white / overall,
+      pct_hispanic = hispanic_or_latino / overall,
+      pct_asian = asian / overall,
+      pct_two_or_more = two_or_more_races / overall,
+      pct_some_other_race = some_other_race / overall,
+      ice_black_white = (black - white) / (white + black),
+      ice_hispanic_white = (hispanic_or_latino - white) / (white + hispanic_or_latino)
+    )
   
   # join the death counts into the total tract population size (i.e. the 
   # gender == NA, age == NA population) and add a mortality rate per 100k column
-  tract_mort_rates <- tract_popsize_totals %>%
-    left_join(tract_counts, by = c('GEOID' = 'tract')) %>% 
-    mutate(mort_per_100k = n / estimate * 1e5) 
+  tract_mort_rates <- tract_features %>%
+    left_join(tract_deaths, by = c('GEOID' = 'tract')) %>% 
+    mutate(mort_per_100k = n / overall * 1e5) 
     
   return(tract_mort_rates)
 }
@@ -145,8 +187,8 @@ add_absms <- function(tract_counts) {
 #' 
 make_tract_mort_w_absms_df <- function(deaths, cook_tracts) {
   
-  tract_counts <- make_tract_mortality_counts(cook_county_deaths, cook_tracts)
-  df <- tract_counts %>% add_absms()
+  tract_deaths <- make_tract_mortality_counts(cook_county_deaths, cook_tracts)
+  df <- tract_deaths %>% add_absms()
   
   return(df)
 }
